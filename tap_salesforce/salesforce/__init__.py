@@ -13,6 +13,7 @@ from tap_salesforce.salesforce.bulk2 import Bulk2
 from tap_salesforce.salesforce.credentials import SalesforceAuth
 from tap_salesforce.salesforce.exceptions import (
     SFDCCustomNotAcceptableError,
+    SFDCServiceUnavailableError,
     TapSalesforceExceptionError,
     TapSalesforceQuotaExceededError,
 )
@@ -154,6 +155,8 @@ def raise_for_status(resp):
 
     if resp.status_code == 406 and "CustomNotAcceptable" in resp.reason:
         raise SFDCCustomNotAcceptableError(err_msg)
+    elif resp.status_code == 503:
+        raise SFDCServiceUnavailableError(err_msg)
     else:
         resp.raise_for_status()
 
@@ -311,6 +314,14 @@ class Salesforce:
         return self.auth.instance_url
 
     # pylint: disable=too-many-arguments
+    @backoff.on_exception(
+        backoff.expo,
+        SFDCServiceUnavailableError,
+        max_tries=6,
+        factor=10,
+        max_value=300,
+        on_backoff=log_backoff_attempt,
+    )
     @backoff.on_exception(
         backoff.expo,
         (requests.exceptions.ConnectionError, SFDCCustomNotAcceptableError),

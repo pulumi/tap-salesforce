@@ -21,3 +21,12 @@ class SFDCCustomNotAcceptableError(Exception):
     requests.exceptions.HTTPError: 406 Client Error: CustomNotAcceptable for
     url: https://XXX.salesforce.com/services/data/v53.0/sobjects/XXX/describe
     """
+
+
+class SFDCServiceUnavailableError(Exception):
+    """
+    SFDC returned HTTP 503 Service Unavailable.
+
+    Usually means the org tripped a concurrent-request limit or is under
+    transient platform throttling. Retryable with exponential backoff.
+    """
