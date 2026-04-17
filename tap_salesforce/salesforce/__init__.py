@@ -273,6 +273,13 @@ class Salesforce:
 
         LOGGER.info("Used %s of %s daily REST API quota", remaining, allotted)
 
+        # BULK / BULK2 runs draw from separate Salesforce quotas
+        # (DailyBulkApiBatches / DailyBulkV2QueryJobs). Don't abort a bulk
+        # replication because the org's REST quota is exhausted by other
+        # consumers. Bulk has its own quota check in Bulk.check_bulk_quota_usage.
+        if self.api_type in ("BULK", "BULK2"):
+            return
+
         percent_used_from_total = (remaining / allotted) * 100
         max_requests_for_run = int((self.quota_percent_per_run * allotted) / 100)
 
