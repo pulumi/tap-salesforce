@@ -156,6 +156,21 @@ def raise_for_status(resp):
     if resp.status_code == 406 and "CustomNotAcceptable" in resp.reason:
         raise SFDCCustomNotAcceptableError(err_msg)
     elif resp.status_code == 503:
+        # If Salesforce reports the daily REST quota is >=100% used, the 503 is
+        # a quota-exhaustion signal, not a transient infra hiccup. Retrying
+        # won't help until the counter rolls at UTC midnight, so fail fast with
+        # a clear quota error instead of burning retries.
+        limit_info = resp.headers.get("Sforce-Limit-Info")
+        if limit_info:
+            match = re.search(r"api-usage=(\d+)/(\d+)", limit_info)
+            if match:
+                used, allotted = int(match.group(1)), int(match.group(2))
+                if allotted > 0 and used >= allotted:
+                    raise TapSalesforceQuotaExceededError(
+                        f"Salesforce reports {used}/{allotted} "
+                        f"({used / allotted * 100:.1f}%) daily REST quota used; "
+                        f"failing fast instead of retrying. {err_msg}"
+                    )
         raise SFDCServiceUnavailableError(err_msg)
     else:
         resp.raise_for_status()
