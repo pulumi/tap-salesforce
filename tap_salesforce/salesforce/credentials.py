@@ -114,10 +114,15 @@ class SalesforceAuthJWT(SalesforceAuth):
             if resp is not None:
                 error_message = error_message + f", Response from Salesforce: {resp.text}"
             raise Exception(error_message) from e
-        finally:
-            LOGGER.info("Starting new login timer")
-            self.login_timer = threading.Timer(self.TOKEN_REFRESH_PERIOD, self.login)
-            self.login_timer.start()
+
+        # Schedule refresh only on success. A failed login left the timer alive
+        # in `finally`, keeping the non-daemon thread running until the next
+        # refresh fired against the same broken credentials - Meltano tasks
+        # looked hung until Airflow timed them out.
+        LOGGER.info("Starting new login timer")
+        self.login_timer = threading.Timer(self.TOKEN_REFRESH_PERIOD, self.login)
+        self.login_timer.daemon = True
+        self.login_timer.start()
 
 
 class SalesforceAuthOAuth(SalesforceAuth):
