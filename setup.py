@@ -4,7 +4,7 @@ from setuptools import setup
 
 setup(
     name="tap-salesforce",
-    version="1.9.0+pulumi.4",
+    version="1.9.0+pulumi.5",
     description="Singer.io tap for extracting data from the Salesforce API",
     author="Stitch",
     url="https://singer.io",
@@ -19,6 +19,7 @@ setup(
         "idna==3.7",
         "cryptography",
         "pyOpenSSL",
+        "PyJWT[crypto]>=2.8.0",
     ],
     entry_points="""
           [console_scripts]

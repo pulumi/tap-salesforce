@@ -1,12 +1,19 @@
 import logging
 import threading
+import time
 from collections import namedtuple
 
+import jwt
 import requests
 from simple_salesforce import SalesforceLogin
 
 LOGGER = logging.getLogger(__name__)
 
+
+JWTCredentials = namedtuple(
+    "JWTCredentials",
+    ("jwt_client_id", "jwt_username", "jwt_private_key", "jwt_audience"),
+)
 
 OAuthCredentials = namedtuple("OAuthCredentials", ("client_id", "client_secret", "refresh_token"))
 
@@ -14,7 +21,10 @@ PasswordCredentials = namedtuple("PasswordCredentials", ("username", "password",
 
 
 def parse_credentials(config):
-    for cls in reversed((OAuthCredentials, PasswordCredentials)):
+    # JWT is the most specific (4 fields), then OAuth refresh token, then SOAP password.
+    # If a tap is configured with multiple sets of credentials during a cutover, the
+    # strongest one wins.
+    for cls in (JWTCredentials, OAuthCredentials, PasswordCredentials):
         creds = cls(*(config.get(key) for key in cls._fields))
         if all(creds):
             return creds
@@ -51,6 +61,9 @@ class SalesforceAuth:
 
     @classmethod
     def from_credentials(cls, credentials, **kwargs):
+        if isinstance(credentials, JWTCredentials):
+            return SalesforceAuthJWT(credentials, **kwargs)
+
         if isinstance(credentials, OAuthCredentials):
             return SalesforceAuthOAuth(credentials, **kwargs)
 
@@ -58,6 +71,53 @@ class SalesforceAuth:
             return SalesforceAuthPassword(credentials, **kwargs)
 
         raise Exception("Invalid credentials")
+
+
+class SalesforceAuthJWT(SalesforceAuth):
+    # Salesforce caps the JWT `exp` claim at 5 minutes; keep it well under that.
+    JWT_LIFETIME_SECONDS = 180
+    TOKEN_REFRESH_PERIOD = 900
+
+    def _build_assertion(self):
+        now = int(time.time())
+        claims = {
+            "iss": self._credentials.jwt_client_id,
+            "sub": self._credentials.jwt_username,
+            "aud": self._credentials.jwt_audience,
+            "exp": now + self.JWT_LIFETIME_SECONDS,
+        }
+        return jwt.encode(claims, self._credentials.jwt_private_key, algorithm="RS256")
+
+    def login(self):
+        token_url = f"{self._credentials.jwt_audience.rstrip('/')}/services/oauth2/token"
+        resp = None
+        try:
+            LOGGER.info("Attempting login via OAuth2 JWT Bearer")
+
+            resp = requests.post(
+                token_url,
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": self._build_assertion(),
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+            resp.raise_for_status()
+            auth = resp.json()
+
+            LOGGER.info("JWT login successful")
+            self._access_token = auth["access_token"]
+            self._instance_url = auth["instance_url"]
+        except Exception as e:
+            error_message = str(e)
+            if resp is not None:
+                error_message = error_message + f", Response from Salesforce: {resp.text}"
+            raise Exception(error_message) from e
+        finally:
+            LOGGER.info("Starting new login timer")
+            self.login_timer = threading.Timer(self.TOKEN_REFRESH_PERIOD, self.login)
+            self.login_timer.start()
 
 
 class SalesforceAuthOAuth(SalesforceAuth):
